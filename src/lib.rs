@@ -1,6 +1,10 @@
 #![no_std]
 
 use core::sync::atomic::{AtomicUsize, Ordering};
+pub use nrf52833_hal as hal;
+
+pub mod images;
+mod led_matrix;
 
 use defmt_rtt as _; // global logger
 use panic_probe as _;
@@ -22,3 +26,5 @@ pub fn exit() -> ! {
         cortex_m::asm::bkpt();
     }
 }
+
+pub use led_matrix::{Image, LedMatrix};

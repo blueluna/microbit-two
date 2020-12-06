@@ -15,8 +15,6 @@ panic-probe = "0.1"
 nrf52833-pac = "0.9"
 nrf52833-hal = "0.12"
 cortex-m-rtic = "0.5"
-bbqueue = "0.4"
-embedded-hal = { version = "0.2.4", features = ["unproven"] }
 
 [features]
 # set logging levels here
