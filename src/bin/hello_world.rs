@@ -23,7 +23,7 @@ const APP: () = {
         // Configure to use external clocks, and start them
         let _clocks = clocks::Clocks::new(cx.device.CLOCK)
             .enable_ext_hfosc()
-            .set_lfclk_src_external(clocks::LfOscConfiguration::NoExternalNoBypass)
+            .set_lfclk_src_synth()
             .start_lfclk();
 
         cx.device.TIMER0.set_periodic();

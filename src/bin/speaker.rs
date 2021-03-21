@@ -8,7 +8,7 @@ use rtic::app;
 use crate::hal::pac;
 use microbit_two::hal;
 
-use hal::{clocks, gpio, timer::Instance};
+use hal::{clocks, gpio, pwm, time::U32Ext, timer::Instance, prelude::OutputPin};
 use pac::{RTC0, TIMER0};
 
 #[app(device = crate::hal::pac, peripherals = true)]
@@ -17,10 +17,12 @@ const APP: () = {
         rtc_0: hal::rtc::Rtc<RTC0>,
         timer_0: TIMER0,
         led_matrix: microbit_two::LedMatrix,
+        speaker: pwm::Pwm<pac::PWM0>,
     }
 
     #[init]
     fn init(cx: init::Context) -> init::LateResources {
+
         // Configure to use external clocks, and start them
         let _clocks = clocks::Clocks::new(cx.device.CLOCK)
             .enable_ext_hfosc()
@@ -55,12 +57,42 @@ const APP: () = {
             port0.p0_19.into_push_pull_output(gpio::Level::Low),
         );
 
+        let mut speaker_pin = port0
+            .p0_00
+            .into_push_pull_output(gpio::Level::Low);
+
+        let _ = speaker_pin.set_low();
+        // Set high drive for speaker pin H0H1 (3) in PIN_CNF.
+
+        let ring_0 = port0
+            .p0_02
+            .into_push_pull_output(gpio::Level::Low);
+        let speaker = pwm::Pwm::new(cx.device.PWM0);
+        speaker
+            .set_output_pin(pwm::Channel::C0, &speaker_pin.degrade())
+            .set_output_pin(pwm::Channel::C1, &ring_0.degrade())
+            .set_prescaler(pwm::Prescaler::Div2)
+            .set_period(1000u32.hz())
+            .set_counter_mode(pwm::CounterMode::UpAndDown)
+            .enable();
+
+        speaker
+            .set_seq_refresh(pwm::Seq::Seq0, 0)
+            .set_seq_refresh(pwm::Seq::Seq1, 0)
+            .set_seq_end_delay(pwm::Seq::Seq0, 0)
+            .set_seq_end_delay(pwm::Seq::Seq1, 0);
+
+        let max_duty = speaker.max_duty();
+
+        speaker.set_duty_on_common(max_duty / 2);
+
         led_matrix.display(microbit_two::images::SCALES);
 
         init::LateResources {
             timer_0: cx.device.TIMER0,
             rtc_0,
             led_matrix,
+            speaker,
         }
     }
 
