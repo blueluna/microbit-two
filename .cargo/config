@@ -6,4 +6,4 @@ rustflags = [
   "-C", "link-arg=-Tlink.x",
   "-C", "link-arg=-Tdefmt.x",
 ]
-runner = "probe-run --probe 0d28:0204 --chip nRF52833_xxAA --defmt"
+runner = "probe-run --probe 0d28:0204 --chip nRF52833_xxAA"
