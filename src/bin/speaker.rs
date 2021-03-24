@@ -8,7 +8,7 @@ use rtic::app;
 use crate::hal::pac;
 use microbit_two::hal;
 
-use hal::{clocks, gpio, pwm, time::U32Ext, timer::Instance, prelude::OutputPin};
+use hal::{clocks, gpio, prelude::OutputPin, pwm, time::U32Ext, timer::Instance};
 use pac::{RTC0, TIMER0};
 
 #[app(device = crate::hal::pac, peripherals = true)]
@@ -22,7 +22,6 @@ const APP: () = {
 
     #[init]
     fn init(cx: init::Context) -> init::LateResources {
-
         // Configure to use external clocks, and start them
         let _clocks = clocks::Clocks::new(cx.device.CLOCK)
             .enable_ext_hfosc()
@@ -57,16 +56,12 @@ const APP: () = {
             port0.p0_19.into_push_pull_output(gpio::Level::Low),
         );
 
-        let mut speaker_pin = port0
-            .p0_00
-            .into_push_pull_output(gpio::Level::Low);
+        let mut speaker_pin = port0.p0_00.into_push_pull_output(gpio::Level::Low);
 
         let _ = speaker_pin.set_low();
         // Set high drive for speaker pin H0H1 (3) in PIN_CNF.
 
-        let ring_0 = port0
-            .p0_02
-            .into_push_pull_output(gpio::Level::Low);
+        let ring_0 = port0.p0_02.into_push_pull_output(gpio::Level::Low);
         let speaker = pwm::Pwm::new(cx.device.PWM0);
         speaker
             .set_output_pin(pwm::Channel::C0, &speaker_pin.degrade())
