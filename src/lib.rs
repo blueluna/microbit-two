@@ -3,8 +3,12 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 pub use nrf52833_hal as hal;
 
+mod error;
 pub mod images;
 mod led_matrix;
+pub mod lpm013m126a;
+
+pub use error::Error;
 
 use defmt_rtt as _; // global logger
 use panic_probe as _;
