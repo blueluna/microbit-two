@@ -8,11 +8,23 @@ use microbit_two::{
 
 use rtic::app;
 
-use microbit_two::{hal::{self, pac}, spim, lpm013m126a};
+use microbit_two::{hal::{self, pac}, spim, lpm013m126a::{self, Palette8, DISPLAY_WIDTH, DISPLAY_HEIGHT}};
 
 use embedded_hal::digital::v2::{OutputPin, StatefulOutputPin};
 use hal::{clocks, gpio, timer::Instance};
 use pac::{RTC0, TIMER0, TIMER1, TIMER2};
+use embedded_graphics::{
+    Drawable, Styled,
+    geometry::{Point, Size},
+    primitives::{Circle, Primitive, PrimitiveStyle, PrimitiveStyleBuilder, RoundedRectangle, Rectangle},
+};
+
+pub struct DrawContext {
+    pub circle: Circle,
+    pub circle_style: PrimitiveStyle<Palette8>,
+    pub background: Styled<Rectangle, PrimitiveStyle<Palette8>>,
+    pub background_style: PrimitiveStyle<Palette8>,
+}
 
 #[app(device = crate::hal::pac, peripherals = true)]
 const APP: () = {
@@ -27,7 +39,7 @@ const APP: () = {
             hal::gpio::p0::P0_03<Output<PushPull>>,
         >,
         jdi_com: hal::gpio::Pin<hal::gpio::Output<hal::gpio::PushPull>>,
-        colour: u8,
+        draw_context: DrawContext,
     }
 
     #[init]
@@ -112,11 +124,27 @@ const APP: () = {
             Ok(_) => (),
         }
 
-        for y in 0..lpm013m126a::DISPLAY_HEIGHT as u8 {
-            for x in 0..lpm013m126a::DISPLAY_WIDTH as u8 {
-                jdi.set_pixel(x, y, lpm013m126a::Palette8::White);
+        for y in 0..DISPLAY_HEIGHT {
+            for x in 0..DISPLAY_WIDTH {
+                jdi.set_pixel(x, y, lpm013m126a::Palette8::Green);
             }
         }
+
+        let circle = Circle::new(Point::new(22, 22), 20);
+        
+        let background_style = PrimitiveStyleBuilder::new()
+            .stroke_width(5)
+            .stroke_color(Palette8::Black)
+            .fill_color(Palette8::Black)
+            .build();
+        let background_rectangle = Rectangle::new(Point::new(0, 0), Size::new(u32::from(DISPLAY_WIDTH), u32::from(DISPLAY_HEIGHT)));
+        let background = background_rectangle.into_styled(background_style);
+        let _ = background.draw(&mut jdi);
+
+        let circle_style = PrimitiveStyleBuilder::new()
+            .stroke_width(3)
+            .stroke_color(Palette8::Cyan)
+            .build();
 
         defmt::info!("Initialized");
 
@@ -128,7 +156,12 @@ const APP: () = {
             led_matrix,
             jdi,
             jdi_com,
-            colour: 0,
+            draw_context: DrawContext {
+                circle,
+                circle_style,
+                background,
+                background_style,
+            }
         }
     }
 
@@ -152,19 +185,28 @@ const APP: () = {
         }
     }
 
-    #[task(binds = TIMER2, resources = [timer_2, jdi, colour])]
+    #[task(binds = TIMER2, resources = [timer_2, jdi, draw_context])]
     fn timer2(cx: timer2::Context) {
-        cx.resources.timer_2.timer_reset_event();
-        *cx.resources.colour += 1;
-        if *cx.resources.colour > 7 {
-            *cx.resources.colour = 0;
+
+        let ctx = cx.resources.draw_context;
+
+        let _ = ctx.circle.into_styled(ctx.background_style).draw(cx.resources.jdi);
+
+        ctx.circle.top_left += Point::new(1,1);
+        if ctx.circle.top_left.x >= lpm013m126a::DISPLAY_WIDTH as i32 {
+            ctx.circle.top_left.x = 0;
+
         }
-        let c = microbit_two::lpm013m126a::Palette8::from(*cx.resources.colour);
-        let y = (lpm013m126a::lpm013m126a::DISPLAY_HEIGHT / 2) as u8;
-        for x in 0..lpm013m126a::lpm013m126a::DISPLAY_WIDTH as u8 {
-            cx.resources.jdi.set_pixel(x, y, c);
+        if ctx.circle.top_left.y >= lpm013m126a::DISPLAY_HEIGHT as i32 {
+            ctx.circle.top_left.y = 0;
+            
         }
+
+        let _ = ctx.circle.into_styled(ctx.circle_style).draw(cx.resources.jdi);
+        
         let _ = cx.resources.jdi.update_display();
+
+        cx.resources.timer_2.timer_reset_event();
     }
 
     #[task(binds = RTC0, resources = [rtc_0, led_matrix])]

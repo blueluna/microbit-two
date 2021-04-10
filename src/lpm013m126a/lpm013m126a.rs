@@ -3,23 +3,25 @@
 //!
 //! ## Connection
 //! 
-//!
+//! 
 //! 
 
-use crate::{DmaSlice, Error};
-use core::convert::From;
+use crate::{DmaSlice, Error, spim::{Instance, Spim}, lpm013m126a::Palette8};
+use core::convert::{From, TryInto};
 use embedded_hal::digital::v2::OutputPin;
-use crate::spim::{Instance, Spim};
+
+#[cfg(feature = "graphics")]
+use embedded_graphics::{draw_target::DrawTarget, Pixel, geometry::{OriginDimensions, Size}};
 
 /// SPI commands for the JDI LPM013M126A
 /// The command layout is 
 pub enum Command {
     /// Update the specified line in 3-bit colour mode
-    DrawLines3bit(u8),
+    DrawLines3bit,
     /// Update the specified line in 1-bit colour mode
-    DrawLines1bit(u8),
+    DrawLines1bit,
     /// Update the specified line in 4-bit colour mode
-    DrawLines4bit(u8),
+    DrawLines4bit,
     /// No update
     NoUpdate,
     /// Clear screen
@@ -36,66 +38,20 @@ pub enum Command {
     InvertOff,
 }
 
-/// Number of bits that are line addressing bits
-const ADDRESS_BITS: usize = 10;
-
-impl From<Command> for u16 {
-    fn from(value: Command) -> u16 {
+impl From<Command> for u8 {
+    fn from(value: Command) -> u8 {
         use Command::*;
         match value {
-            DrawLines3bit(address) => 0b_100000 << ADDRESS_BITS | u16::from(address),
-            DrawLines1bit(address) => 0b_100010 << ADDRESS_BITS | u16::from(address),
-            DrawLines4bit(address) => 0b_100100 << ADDRESS_BITS | u16::from(address),
-            NoUpdate => 0b_000000 << ADDRESS_BITS,
-            Clear => 0b_001000 << ADDRESS_BITS,
-            BlinkOff => 0b_000000 << ADDRESS_BITS,
-            BlinkBlack => 0b_000100 << ADDRESS_BITS,
-            BlinkWhite => 0b_000110 << ADDRESS_BITS,
-            InvertOn => 0b_000101 << ADDRESS_BITS,
-            InvertOff => 0b_000000 << ADDRESS_BITS,
-        }
-    }
-}
-#[derive(Copy, Clone)]
-pub enum Colour {
-    Black,
-    Blue,
-    Green,
-    Cyan,
-    Red,
-    Pink,
-    Yellow,
-    White,
-}
-
-impl From<Colour> for u8 {
-    fn from(value: Colour) -> u8 {
-        use Colour::*;
-        match value {
-            Black => 0x00,
-            Blue => 0x01,
-            Green => 0x02,
-            Cyan => 0x03,
-            Red => 0x04,
-            Pink => 0x05,
-            Yellow => 0x06,
-            White => 0x07,
-        }
-    }
-}
-
-impl From<u8> for Colour {
-    fn from(value: u8) -> Colour {
-        use Colour::*;
-        match value {
-            1 => Blue,
-            2 => Green,
-            3 => Cyan,
-            4 => Red,
-            5 => Pink,
-            6 => Yellow,
-            7 => White,
-            _ => Black,
+            DrawLines3bit => 0b_1000_0000,
+            DrawLines1bit => 0b_1000_1000,
+            DrawLines4bit => 0b_1001_0000,
+            NoUpdate => 0b_0000_0000,
+            Clear => 0b_0010_0000,
+            BlinkOff => 0b_0000_0000,
+            BlinkBlack => 0b_0001_0000,
+            BlinkWhite => 0b_0001_1000,
+            InvertOn => 0b_0001_0100,
+            InvertOff => 0b_0000_0000,
         }
     }
 }
@@ -104,19 +60,21 @@ pub struct Lpm013m126a<SPI, DISP> {
     spi: Spim<SPI>,
     display: DISP,
     buffer: [u8; OCTETS_4BIT_LINE_CMD], // buffer holding up to one line of 4-bit pixels
-    mode: u8,
+    frame_buffer: [u8; FRAME_BUFFER_SIZE], // buffer holding up to one line of 4-bit pixels
+    flags: u32,
     current_line: u8,
-    current_colour: u8,
 }
 
-const DISPLAY_WIDTH: usize = 176;
-const DISPLAY_HEIGHT: usize = 176;
-const LINE_WIDTH_3BIT: usize = (DISPLAY_WIDTH * 3) / 8;
-const LINE_WIDTH_4BIT: usize = (DISPLAY_WIDTH * 4) / 8;
+pub const DISPLAY_WIDTH: u8 = 176;
+pub const DISPLAY_HEIGHT: u8 = 176;
+const LINE_WIDTH_4BIT: usize = (DISPLAY_WIDTH as usize) >> 1;
 // octets needed for a 4-bit colour line update
 const OCTETS_4BIT_LINE_CMD: usize = LINE_WIDTH_4BIT + 4;
-// octets needed for a 4-bit colour full screen update
-// const OCTETS_4BIT_SCREEN_CMD: usize = ((LINE_WIDTH_4BIT + 2) * DISPLAY_HEIGHT) + 2;
+const FRAME_BUFFER_SIZE: usize = LINE_WIDTH_4BIT * (DISPLAY_HEIGHT as usize);
+
+const FLAGS_NONE: u32 = 0x0000_0000;
+const FLAGS_DRAWING: u32 = 0x0000_0001;
+const FLAGS_UPDATE: u32 = 0x0000_0002;
 
 impl<SPI, DISP> Lpm013m126a<SPI, DISP>
 where
@@ -128,8 +86,8 @@ where
             spi,
             display,
             buffer: [0u8; OCTETS_4BIT_LINE_CMD],
-            mode: 0,
-            current_colour: 0xf,
+            frame_buffer: [0u8; FRAME_BUFFER_SIZE],
+            flags: FLAGS_NONE,
             current_line: 0,
         }
     }
@@ -146,14 +104,20 @@ where
 
     pub fn spi_task_event(&mut self) {
         self.spi.clear_write_event();
-        if self.mode == 1 {
-            self.current_line += 1;
-            if self.current_line < DISPLAY_WIDTH as u8 {
-                self.send_colour_line(self.current_line, self.current_colour);
+        self.current_line += 1;
+        if self.current_line < DISPLAY_WIDTH as u8 {
+            self.send_line(self.current_line);
+        }
+        else {
+            self.current_line = 0;
+            let mut remove_flags = FLAGS_UPDATE;
+            if (self.flags & FLAGS_UPDATE) == FLAGS_UPDATE {
+                self.send_line(self.current_line);
             }
             else {
-                self.current_line = 1;
+                remove_flags |= FLAGS_DRAWING;
             }
+            self.flags &= !remove_flags;
         }
     }
 
@@ -165,57 +129,90 @@ where
         self.spi.start_spi_dma_transfer(DmaSlice::from_slice(&self.buffer[..size]), DmaSlice::null()).map_err(|_| Error::BusWriteError)
     }
 
+    fn send_short_command(&mut self, command: Command) -> Result<(), Error>
+    {
+        let cmd = [ u8::from(command), 0 ];
+        self.send(&cmd)
+    }
+
     pub fn send_clear(&mut self) -> Result<(), Error> {
-        self.send(u16::from(Command::Clear).to_be_bytes().as_ref())
+        self.send_short_command(Command::Clear)
     }
 
     pub fn blink_white(&mut self) -> Result<(), Error> {
-        self.send(u16::from(Command::BlinkWhite).to_be_bytes().as_ref())
+        self.send_short_command(Command::BlinkWhite)
     }
 
-    pub fn send_all_white(&mut self) -> Result<(), Error> {
-        let mut offset = 0;
-        self.buffer[offset..offset + 2]
-            .copy_from_slice(u16::from(Command::DrawLines3bit(1)).to_be_bytes().as_ref());
-        offset += 2;
-        for h in 0..DISPLAY_HEIGHT {
-            if h != 0 {
-                self.buffer[offset] = 0;
-                self.buffer[offset + 1] = (h + 1) as u8;
-                offset += 2;
-            }
-            for w in 0..LINE_WIDTH_3BIT {
-                self.buffer[offset + w] = 0xff;
-            }
-            offset += LINE_WIDTH_3BIT;
-        }
-        self.buffer[offset] = 0;
-        self.buffer[offset + 1] = 0;
-        offset += 2;
-        self.send_buffer(offset)
-    }
-
-    fn send_colour_line(&mut self, line: u8, colour: u8) -> Result<(), Error> {
-        let mut offset = 0;
-        self.buffer[offset..offset + 2]
-            .copy_from_slice(u16::from(Command::DrawLines4bit(line + 1)).to_be_bytes().as_ref());
-        offset += 2;
-        for w in 0..LINE_WIDTH_4BIT {
-            self.buffer[offset + w] = colour | colour << 4;
-        }
-        offset += LINE_WIDTH_4BIT;
-        self.buffer[offset] = 0;
-        self.buffer[offset + 1] = 0;
-        offset += 2;
-        self.send_buffer(offset)?;
+    fn send_line(&mut self, line: u8) -> Result<(), Error> {
+        let fb_start = line as usize * LINE_WIDTH_4BIT;
+        let fb_end = (line as usize + 1) * LINE_WIDTH_4BIT;
+        let slice = &self.frame_buffer[fb_start..fb_end];
+        self.buffer[0] = u8::from(Command::DrawLines4bit);
+        self.buffer[1] = line;
+        self.buffer[2..2 + LINE_WIDTH_4BIT].copy_from_slice(slice);
+        self.buffer[2 + LINE_WIDTH_4BIT] = 0;
+        self.buffer[2 + LINE_WIDTH_4BIT + 1] = 0;
+        self.send_buffer(OCTETS_4BIT_LINE_CMD)?;
         Ok(())
     }
 
-    pub fn send_colour_lines(&mut self, colour: Colour) -> Result<(), Error> {
-        self.current_line = 0;
-        self.current_colour = u8::from(colour) << 1;
-        self.mode = 1;
-        self.send_colour_line(self.current_line, self.current_colour)?;
+    pub fn set_pixel(&mut self, x: u8, y: u8, colour: Palette8) {
+        let c = u8::from(colour);
+        let (c, mask) = if x & 1 == 1 { (c << 4, 0x0f) } else { (c, 0xf0) };
+        let x = (x >> 1) as usize;
+        let y = y as usize * LINE_WIDTH_4BIT;
+        let i = x + y;
+        self.frame_buffer[i] = (self.frame_buffer[i] & mask) | c;
+    }
+
+    pub fn update_display(&mut self) -> Result<(), Error>
+    {
+        self.flags |= FLAGS_UPDATE;
+        if (self.flags & FLAGS_DRAWING) == 0 {
+            self.flags |= FLAGS_DRAWING;
+            self.send_line(0)
+        }
+        else {
+            Ok(())
+        }
+    }
+}
+
+
+#[cfg(feature = "graphics")]
+impl<SPI, DISP> DrawTarget for Lpm013m126a<SPI, DISP>
+where
+    SPI: Instance,
+    DISP: OutputPin,
+{
+    type Color = Palette8;
+    // `ExampleDisplay` uses a framebuffer and doesn't need to communicate with the display
+    // controller to draw pixel, which means that drawing operations can never fail. To reflect
+    // this the type `Infallible` was chosen as the `Error` type.
+    type Error = core::convert::Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        const X_LIMIT: i32 = DISPLAY_WIDTH as i32 - 1;
+        const Y_LIMIT: i32 = DISPLAY_HEIGHT as i32 - 1;
+        for Pixel(coord, colour) in pixels.into_iter() {
+            // Check if the pixel coordinates are out of bounds (negative or greater than
+            // (63,63)). `DrawTarget` implementation are required to discard any out of bounds
+            // pixels without returning an error or causing a panic.
+            if let Ok((x @ 0..=X_LIMIT, y @ 0..=Y_LIMIT)) = coord.try_into() {
+                self.set_pixel(x as u8, y as u8, colour);
+            }
+        }
+
         Ok(())
+    }
+}
+
+#[cfg(feature = "graphics")]
+impl<SPI, DISP> OriginDimensions for Lpm013m126a<SPI, DISP> {
+    fn size(&self) -> Size {
+        Size::new(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)
     }
 }
