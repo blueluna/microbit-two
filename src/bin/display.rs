@@ -8,8 +8,7 @@ use microbit_two::{
 
 use rtic::app;
 
-use crate::hal::pac;
-use microbit_two::hal;
+use microbit_two::{hal::{self, pac}, spim, lpm013m126a};
 
 use embedded_hal::digital::v2::{OutputPin, StatefulOutputPin};
 use hal::{clocks, gpio, timer::Instance};
@@ -23,9 +22,8 @@ const APP: () = {
         timer_1: TIMER1,
         timer_2: TIMER2,
         led_matrix: microbit_two::LedMatrix,
-        jdi: microbit_two::lpm013m126a::Lpm013m126a<
-            hal::spim::Spim<pac::SPIM1>,
-            hal::gpio::p0::P0_02<Output<PushPull>>,
+        jdi: lpm013m126a::Lpm013m126a<
+            pac::SPIM3,
             hal::gpio::p0::P0_03<Output<PushPull>>,
         >,
         jdi_com: hal::gpio::Pin<hal::gpio::Output<hal::gpio::PushPull>>,
@@ -49,11 +47,11 @@ const APP: () = {
 
         cx.device.TIMER1.set_periodic();
         cx.device.TIMER1.enable_interrupt();
-        cx.device.TIMER1.timer_start(8_000_u32);
+        cx.device.TIMER1.timer_start(1_000_000_u32);
 
         cx.device.TIMER2.set_periodic();
         cx.device.TIMER2.enable_interrupt();
-        cx.device.TIMER2.timer_start(10_00_000_u32);
+        cx.device.TIMER2.timer_start(41_666_u32);
 
         let mut rtc_0 = match hal::rtc::Rtc::new(cx.device.RTC0, 4095) {
             Ok(r) => r,
@@ -78,9 +76,9 @@ const APP: () = {
 
         led_matrix.display(microbit_two::images::SCALES);
 
-        let jdi_spi = hal::Spim::new(
-            cx.device.SPIM1,
-            hal::spim::Pins {
+        let jdi_spi = spim::Spim::new(
+            cx.device.SPIM3,
+            spim::Pins {
                 sck: port0
                     .p0_17
                     .into_push_pull_output(gpio::Level::High)
@@ -92,14 +90,15 @@ const APP: () = {
                         .degrade(),
                 ),
                 miso: None,
+                csn: Some(port0.p0_02.into_push_pull_output(gpio::Level::Low).degrade()),
+                csn_pol: true,
             },
-            hal::spim::Frequency::M2,
+            hal::spim::Frequency::M4,
             hal::spim::MODE_0,
             0,
         );
-        let mut jdi = microbit_two::lpm013m126a::Lpm013m126a::new(
+        let mut jdi = lpm013m126a::Lpm013m126a::new(
             jdi_spi,
-            port0.p0_02.into_push_pull_output(gpio::Level::Low),
             port0.p0_03.into_push_pull_output(gpio::Level::Low),
         );
 
@@ -108,9 +107,7 @@ const APP: () = {
             .into_push_pull_output(gpio::Level::Low)
             .degrade();
 
-        let mut delay = hal::delay::Delay::new(cx.core.SYST);
-
-        match jdi.init(&mut delay) {
+        match jdi.init() {
             Err(_) => defmt::error!("Failed to initialize JDI"),
             Ok(_) => (),
         }
@@ -157,7 +154,7 @@ const APP: () = {
             *cx.resources.colour = 0;
         }
         let c = microbit_two::lpm013m126a::Colour::from(*cx.resources.colour);
-        let _ = cx.resources.jdi.send_colour(c);
+        let _ = cx.resources.jdi.send_colour_lines(c);
     }
 
     #[task(binds = RTC0, resources = [rtc_0, led_matrix])]
@@ -166,5 +163,10 @@ const APP: () = {
             .resources
             .rtc_0
             .is_event_triggered(hal::rtc::RtcInterrupt::Tick);
+    }
+
+    #[task(binds = SPIM3, resources = [jdi])]
+    fn display_spi(cx: display_spi::Context) {
+        cx.resources.jdi.spi_task_event();
     }
 };
