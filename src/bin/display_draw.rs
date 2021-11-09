@@ -14,9 +14,9 @@ use embedded_hal::digital::v2::{OutputPin, StatefulOutputPin};
 use hal::{clocks, gpio, timer::Instance};
 use pac::{RTC0, TIMER0, TIMER1, TIMER2};
 use embedded_graphics::{
-    Drawable, Styled,
+    Drawable,
     geometry::{Point, Size},
-    primitives::{Circle, Primitive, PrimitiveStyle, PrimitiveStyleBuilder, RoundedRectangle, Rectangle},
+    primitives::{Circle, Primitive, PrimitiveStyle, PrimitiveStyleBuilder, RoundedRectangle, Rectangle, Styled},
 };
 
 pub struct DrawContext {
