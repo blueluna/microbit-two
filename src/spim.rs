@@ -113,9 +113,17 @@ where
                 });
                 let csn_pol = pins.csn_pol;
                 defmt::info!("Set CSN {=u32:x}", csn.psel_bits());
-                spim.csnpol.write(|w| if csn_pol { w.csnpol().high() } else { w.csnpol().low() } );
-                spim.iftiming.csndur.write(|w| unsafe { w.csndur().bits(0x1f) });
-            },
+                spim.csnpol.write(|w| {
+                    if csn_pol {
+                        w.csnpol().high()
+                    } else {
+                        w.csnpol().low()
+                    }
+                });
+                spim.iftiming
+                    .csndur
+                    .write(|w| unsafe { w.csndur().bits(0x1f) });
+            }
             None => spim.psel.csn.write(|w| w.connect().disconnected()),
         }
 
@@ -166,7 +174,11 @@ where
     }
 
     /// Internal helper function to setup and execute SPIM DMA transfer.
-    pub(crate) fn start_spi_dma_transfer(&mut self, tx: DmaSlice, rx: DmaSlice) -> Result<(), Error> {
+    pub(crate) fn start_spi_dma_transfer(
+        &mut self,
+        tx: DmaSlice,
+        rx: DmaSlice,
+    ) -> Result<(), Error> {
         // Conservative compiler fence to prevent optimizations that do not
         // take in to account actions by DMA. The fence has been placed here,
         // before any DMA action has started.
@@ -218,8 +230,7 @@ where
         Ok(())
     }
 
-    pub fn clear_write_event(&mut self)
-    {
+    pub fn clear_write_event(&mut self) {
         // Wait for END event.
         //
         // This event is triggered once both transmitting and receiving are

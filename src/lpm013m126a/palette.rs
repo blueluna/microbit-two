@@ -11,10 +11,8 @@
 //! * Yellow
 //! * White
 
-
 #[cfg(feature = "graphics")]
-use embedded_graphics::pixelcolor::{PixelColor, raw::RawU4};
-
+use embedded_graphics::pixelcolor::{raw::RawU4, PixelColor};
 
 // impl private::Sealed for RawU3 {}
 

@@ -1,37 +1,42 @@
 #![no_main]
 #![no_std]
 
-use microbit_two::{
-    self,
-    hal::gpio::{Output, PushPull},
-};
-
+use microbit_two::hal;
+use microbit_two::hal::pac;
 use rtic::app;
 
-use microbit_two::{hal::{self, pac}, spim, lpm013m126a};
+#[app(device = pac, peripherals = true)]
+mod app {
+    use super::{hal, pac};
 
-use embedded_hal::digital::v2::{OutputPin, StatefulOutputPin};
-use hal::{clocks, gpio, timer::Instance};
-use pac::{RTC0, TIMER0, TIMER1, TIMER2};
+    use embedded_hal::digital::v2::{OutputPin, StatefulOutputPin};
+    use hal::{
+        clocks,
+        gpio::{self, Output, PushPull},
+        timer::Instance,
+    };
+    use microbit_two::{lpm013m126a, spim};
+    use pac::{RTC0, TIMER0, TIMER1, TIMER2};
 
-#[app(device = crate::hal::pac, peripherals = true)]
-const APP: () = {
-    struct Resources {
+    #[local]
+    struct Local {
         rtc_0: hal::rtc::Rtc<RTC0>,
         timer_0: TIMER0,
         timer_1: TIMER1,
         timer_2: TIMER2,
         led_matrix: microbit_two::LedMatrix,
-        jdi: lpm013m126a::Lpm013m126a<
-            pac::SPIM3,
-            hal::gpio::p0::P0_03<Output<PushPull>>,
-        >,
         jdi_com: hal::gpio::Pin<hal::gpio::Output<hal::gpio::PushPull>>,
         colour: u8,
     }
 
+    #[shared]
+    struct Shared {
+        #[lock_free]
+        jdi: lpm013m126a::Lpm013m126a<pac::SPIM3, hal::gpio::p0::P0_03<Output<PushPull>>>,
+    }
+
     #[init]
-    fn init(cx: init::Context) -> init::LateResources {
+    fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         // Configure to use external clocks, and start them
         let _clocks = clocks::Clocks::new(cx.device.CLOCK)
             .enable_ext_hfosc()
@@ -90,7 +95,12 @@ const APP: () = {
                         .degrade(),
                 ),
                 miso: None,
-                csn: Some(port0.p0_02.into_push_pull_output(gpio::Level::Low).degrade()),
+                csn: Some(
+                    port0
+                        .p0_02
+                        .into_push_pull_output(gpio::Level::Low)
+                        .degrade(),
+                ),
                 csn_pol: true,
             },
             hal::spim::Frequency::M4,
@@ -120,63 +130,64 @@ const APP: () = {
 
         defmt::info!("Initialized");
 
-        init::LateResources {
+        let shared = Shared { jdi };
+        let local = Local {
             timer_0: cx.device.TIMER0,
             timer_1: cx.device.TIMER1,
             timer_2: cx.device.TIMER2,
             rtc_0,
             led_matrix,
-            jdi,
             jdi_com,
             colour: 0,
-        }
+        };
+        (shared, local, init::Monotonics())
     }
 
-    #[task(binds = TIMER0, resources = [timer_0, led_matrix])]
+    #[task(binds = TIMER0, local = [timer_0, led_matrix])]
     fn timer0(cx: timer0::Context) {
-        cx.resources.timer_0.timer_reset_event();
-        cx.resources.led_matrix.update();
+        cx.local.timer_0.timer_reset_event();
+        cx.local.led_matrix.update();
     }
 
-    #[task(binds = TIMER1, resources = [timer_1, jdi_com])]
+    #[task(binds = TIMER1, local = [timer_1, jdi_com])]
     fn timer1(cx: timer1::Context) {
-        cx.resources.timer_1.timer_reset_event();
-        let high = match cx.resources.jdi_com.is_set_high() {
+        cx.local.timer_1.timer_reset_event();
+        let high = match cx.local.jdi_com.is_set_high() {
             Ok(s) => s,
             Err(_) => false,
         };
         if high {
-            let _ = cx.resources.jdi_com.set_low();
+            let _ = cx.local.jdi_com.set_low();
         } else {
-            let _ = cx.resources.jdi_com.set_high();
+            let _ = cx.local.jdi_com.set_high();
         }
     }
 
-    #[task(binds = TIMER2, resources = [timer_2, jdi, colour])]
+    #[task(binds = TIMER2, local = [timer_2, colour], shared = [jdi])]
     fn timer2(cx: timer2::Context) {
-        cx.resources.timer_2.timer_reset_event();
-        *cx.resources.colour += 1;
-        if *cx.resources.colour > 7 {
-            *cx.resources.colour = 0;
+        cx.local.timer_2.timer_reset_event();
+        *cx.local.colour += 1;
+        if *cx.local.colour > 7 {
+            *cx.local.colour = 0;
         }
-        let c = microbit_two::lpm013m126a::Palette8::from(*cx.resources.colour);
+        let c = microbit_two::lpm013m126a::Palette8::from(*cx.local.colour);
         let y = (lpm013m126a::lpm013m126a::DISPLAY_HEIGHT / 2) as u8;
         for x in 0..lpm013m126a::lpm013m126a::DISPLAY_WIDTH as u8 {
-            cx.resources.jdi.set_pixel(x, y, c);
+            cx.shared.jdi.set_pixel(x, y, c);
         }
-        let _ = cx.resources.jdi.update_display();
+        let _ = cx.shared.jdi.update_display();
     }
 
-    #[task(binds = RTC0, resources = [rtc_0, led_matrix])]
+    #[task(binds = RTC0, local = [rtc_0])]
     fn rtc(cx: rtc::Context) {
         let _ = cx
-            .resources
+            .local
             .rtc_0
             .is_event_triggered(hal::rtc::RtcInterrupt::Tick);
     }
 
-    #[task(binds = SPIM3, resources = [jdi])]
+    #[task(binds = SPIM3, shared = [jdi])]
     fn display_spi(cx: display_spi::Context) {
-        cx.resources.jdi.spi_task_event();
+        cx.shared.jdi.spi_task_event();
     }
-};
+}

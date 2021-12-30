@@ -1,25 +1,28 @@
 #![no_main]
 #![no_std]
 
-use microbit_two as _;
-
+use microbit_two;
+use microbit_two::hal;
+use microbit_two::hal::pac;
 use rtic::app;
 
-use crate::hal::pac;
-use microbit_two::hal;
+#[app(device = pac, peripherals = true)]
+mod app {
+    use super::{hal, pac};
+    use hal::{clocks, timer::Instance};
+    use pac::{RTC0, TIMER0};
 
-use hal::{clocks, timer::Instance};
-use pac::{RTC0, TIMER0};
-
-#[app(device = crate::hal::pac, peripherals = true)]
-const APP: () = {
-    struct Resources {
+    #[local]
+    struct LocalResources {
         rtc_0: hal::rtc::Rtc<RTC0>,
         timer_0: TIMER0,
     }
 
+    #[shared]
+    struct SharedResources {}
+
     #[init]
-    fn init(cx: init::Context) -> init::LateResources {
+    fn init(cx: init::Context) -> (SharedResources, LocalResources, init::Monotonics) {
         // Configure to use external clocks, and start them
         let _clocks = clocks::Clocks::new(cx.device.CLOCK)
             .enable_ext_hfosc()
@@ -40,24 +43,28 @@ const APP: () = {
 
         defmt::info!("~ initialisation ~");
 
-        init::LateResources {
-            timer_0: cx.device.TIMER0,
-            rtc_0,
-        }
+        (
+            SharedResources {},
+            LocalResources {
+                rtc_0,
+                timer_0: cx.device.TIMER0,
+            },
+            init::Monotonics(),
+        )
     }
 
-    #[task(binds = TIMER0, resources = [timer_0])]
+    #[task(binds = TIMER0, local = [timer_0])]
     fn timer(cx: timer::Context) {
-        cx.resources.timer_0.timer_reset_event();
+        cx.local.timer_0.timer_reset_event();
         defmt::info!("~ timer ~");
     }
 
-    #[task(binds = RTC0, resources = [rtc_0])]
+    #[task(binds = RTC0, local = [rtc_0])]
     fn rtc(cx: rtc::Context) {
         let _ = cx
-            .resources
+            .local
             .rtc_0
             .is_event_triggered(hal::rtc::RtcInterrupt::Tick);
         defmt::info!("~ RTC ~");
     }
-};
+}

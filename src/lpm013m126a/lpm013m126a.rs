@@ -2,19 +2,27 @@
 //! SPI 8 colour memory in pixel (MIP) display
 //!
 //! ## Connection
-//! 
-//! 
-//! 
+//!
+//!
+//!
 
-use crate::{DmaSlice, Error, spim::{Instance, Spim}, lpm013m126a::Palette8};
+use crate::{
+    lpm013m126a::Palette8,
+    spim::{Instance, Spim},
+    DmaSlice, Error,
+};
 use core::convert::{From, TryInto};
 use embedded_hal::digital::v2::OutputPin;
 
 #[cfg(feature = "graphics")]
-use embedded_graphics::{draw_target::DrawTarget, Pixel, geometry::{OriginDimensions, Size}};
+use embedded_graphics::{
+    draw_target::DrawTarget,
+    geometry::{OriginDimensions, Size},
+    Pixel,
+};
 
 /// SPI commands for the JDI LPM013M126A
-/// The command layout is 
+/// The command layout is
 pub enum Command {
     /// Update the specified line in 3-bit colour mode
     DrawLines3bit,
@@ -106,15 +114,13 @@ where
         self.spi.clear_write_event();
         self.current_line += 1;
         if self.current_line < DISPLAY_WIDTH as u8 {
-            self.send_line(self.current_line);
-        }
-        else {
+            let _ = self.send_line(self.current_line);
+        } else {
             self.current_line = 0;
             let mut remove_flags = FLAGS_UPDATE;
             if (self.flags & FLAGS_UPDATE) == FLAGS_UPDATE {
-                self.send_line(self.current_line);
-            }
-            else {
+                let _ = self.send_line(self.current_line);
+            } else {
                 remove_flags |= FLAGS_DRAWING;
             }
             self.flags &= !remove_flags;
@@ -122,16 +128,19 @@ where
     }
 
     fn send(&mut self, data: &[u8]) -> Result<(), Error> {
-        self.spi.start_spi_dma_transfer(DmaSlice::from_slice(data), DmaSlice::null()).map_err(|_| Error::BusWriteError)
+        self.spi
+            .start_spi_dma_transfer(DmaSlice::from_slice(data), DmaSlice::null())
+            .map_err(|_| Error::BusWriteError)
     }
 
     fn send_buffer(&mut self, size: usize) -> Result<(), Error> {
-        self.spi.start_spi_dma_transfer(DmaSlice::from_slice(&self.buffer[..size]), DmaSlice::null()).map_err(|_| Error::BusWriteError)
+        self.spi
+            .start_spi_dma_transfer(DmaSlice::from_slice(&self.buffer[..size]), DmaSlice::null())
+            .map_err(|_| Error::BusWriteError)
     }
 
-    fn send_short_command(&mut self, command: Command) -> Result<(), Error>
-    {
-        let cmd = [ u8::from(command), 0 ];
+    fn send_short_command(&mut self, command: Command) -> Result<(), Error> {
+        let cmd = [u8::from(command), 0];
         self.send(&cmd)
     }
 
@@ -158,26 +167,27 @@ where
 
     pub fn set_pixel(&mut self, x: u8, y: u8, colour: Palette8) {
         let c = u8::from(colour);
-        let (c, mask) = if x & 1 == 1 { (c << 4, 0x0f) } else { (c, 0xf0) };
+        let (c, mask) = if x & 1 == 1 {
+            (c << 4, 0x0f)
+        } else {
+            (c, 0xf0)
+        };
         let x = (x >> 1) as usize;
         let y = y as usize * LINE_WIDTH_4BIT;
         let i = x + y;
         self.frame_buffer[i] = (self.frame_buffer[i] & mask) | c;
     }
 
-    pub fn update_display(&mut self) -> Result<(), Error>
-    {
+    pub fn update_display(&mut self) -> Result<(), Error> {
         self.flags |= FLAGS_UPDATE;
         if (self.flags & FLAGS_DRAWING) == 0 {
             self.flags |= FLAGS_DRAWING;
             self.send_line(0)
-        }
-        else {
+        } else {
             Ok(())
         }
     }
 }
-
 
 #[cfg(feature = "graphics")]
 impl<SPI, DISP> DrawTarget for Lpm013m126a<SPI, DISP>
