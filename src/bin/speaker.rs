@@ -16,7 +16,6 @@ mod app {
         rtc_0: hal::rtc::Rtc<RTC0>,
         timer_0: TIMER0,
         led_matrix: microbit_two::LedMatrix,
-        speaker: pwm::Pwm<pac::PWM0>,
     }
 
     #[shared]
@@ -89,7 +88,6 @@ mod app {
             timer_0: cx.device.TIMER0,
             rtc_0,
             led_matrix,
-            speaker,
         };
         (Shared {}, local, init::Monotonics())
     }
